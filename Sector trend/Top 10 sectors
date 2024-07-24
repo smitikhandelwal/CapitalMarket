@@ -1,0 +1,104 @@
+import os
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+# Read the symbols and their sectors
+symbols_sectors = pd.read_excel('nse_data.xlsx', sheet_name='Sheet1')
+
+# File to store historical data
+historical_data_file = 'historical_data.xlsx'
+
+# Check if historical data file exists
+if os.path.exists(historical_data_file):
+    historical_data = pd.read_excel(historical_data_file)
+else:
+    historical_data = pd.DataFrame()
+
+# List of symbols already fetched
+fetched_symbols = historical_data['Symbol'].unique() if not historical_data.empty else []
+
+# Function to fetch historical data with error handling
+def fetch_data(symbol):
+    try:
+        print(f"Fetching data for {symbol}...")
+        stock_data = yf.download(symbol + ".NS", period='1y')  # Fetching 12 months of data
+        if stock_data.empty:
+            raise ValueError(f"No data found for {symbol}")
+        stock_data.reset_index(inplace=True)
+        stock_data['Symbol'] = symbol
+        return stock_data
+    except Exception as e:
+        print(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()  # Return an empty DataFrame if an error occurs
+
+# Fetch historical data for symbols that haven't been fetched yet
+all_data = [historical_data] if not historical_data.empty else []
+failed_symbols = []
+
+for symbol in symbols_sectors['Symbol']:
+    if symbol not in fetched_symbols:
+        stock_data = fetch_data(symbol)
+        if not stock_data.empty:
+            all_data.append(stock_data)
+        else:
+            failed_symbols.append(symbol)
+
+# Combine all historical data into a single DataFrame
+if all_data:
+    historical_data = pd.concat(all_data, ignore_index=True)
+
+# Save updated historical data
+historical_data.to_excel(historical_data_file, index=False)
+
+# Merge the historical data with symbols and sectors
+data = pd.merge(historical_data, symbols_sectors, on='Symbol')
+
+# Convert the Date column to datetime
+data['Date'] = pd.to_datetime(data['Date'])
+
+# Calculate the average closing price for each sector at the beginning and end of the 12-month period
+start_date = data['Date'].min()
+end_date = data['Date'].max()
+
+# Filter data for the start and end dates
+start_data = data[data['Date'] == start_date]
+end_data = data[data['Date'] == end_date]
+
+# Group data by sector and calculate the average closing price
+start_avg = start_data.groupby('Sector')['Close'].mean().reset_index()
+end_avg = end_data.groupby('Sector')['Close'].mean().reset_index()
+
+# Merge the start and end averages
+growth_data = pd.merge(start_avg, end_avg, on='Sector', suffixes=('_Start', '_End'))
+
+# Calculate the growth percentage
+growth_data['Growth_Percent'] = ((growth_data['Close_End'] - growth_data['Close_Start']) / growth_data['Close_Start']) * 100
+
+# Sort by growth percentage and select top 10 sectors
+top_10_sectors = growth_data.nlargest(10, 'Growth_Percent')
+
+# Plot the growth percentage for the top 10 sectors
+plt.figure(figsize=(14, 7))
+plt.bar(top_10_sectors['Sector'], top_10_sectors['Growth_Percent'], color='skyblue')
+plt.title('Top 10 Sectors by Growth Percentage over the Last 12 Months in NSE')
+plt.xlabel('Sector')
+plt.ylabel('Growth Percentage')
+plt.xticks(rotation=45)
+plt.grid(True)
+plt.show()
+
+# Save the processed data to a new Excel file
+with pd.ExcelWriter('nse_sector_growth.xlsx') as writer:
+    data.to_excel(writer, sheet_name='HistoricalData', index=False)
+    growth_data.to_excel(writer, sheet_name='GrowthData', index=False)
+    top_10_sectors.to_excel(writer, sheet_name='Top10GrowthData', index=False)
+
+print("Data processing complete and saved to 'nse_sector_growth.xlsx'")
+
+# Log failed symbols
+if failed_symbols:
+    with open('failed_symbols.txt', 'w') as f:
+        for symbol in failed_symbols:
+            f.write(f"{symbol}\n")
+    print(f"Data fetching failed for symbols: {failed_symbols}. See 'failed_symbols.txt' for details.")
