@@ -1,0 +1,119 @@
+import yfinance as yf
+import pandas as pd
+import sqlite3
+from datetime import datetime, timedelta
+import schedule
+import time
+
+# Initialize database connection
+conn = sqlite3.connect('stocks.db')
+c = conn.cursor()
+
+# Create table to store stock data
+c.execute('''
+    CREATE TABLE IF NOT EXISTS stock_data (
+        ticker TEXT,
+        timestamp TEXT,
+        open REAL,
+        close REAL
+    )
+''')
+conn.commit()
+
+def get_initial_stock_data(ticker):
+    try:
+        yf_symbol = ticker + '.NS'
+        start_time = datetime.now().replace(hour=9, minute=15, second=0, microsecond=0)
+        if datetime.now() < start_time:
+            start_time -= timedelta(days=1)
+        end_time = start_time + timedelta(minutes=1)
+        data = yf.download(yf_symbol, start=start_time, end=end_time, interval='1m')
+        if not data.empty:
+            data.reset_index(inplace=True)
+            return data
+    except Exception as e:
+        print(f"Error fetching initial data for symbol {ticker}: {e}")
+    return None
+
+def store_initial_data(tickers):
+    for ticker in tickers:
+        data = get_initial_stock_data(ticker)
+        if data is not None:
+            for _, row in data.iterrows():
+                c.execute('''
+                    INSERT INTO stock_data (ticker, timestamp, open, close)
+                    VALUES (?, ?, ?, ?)
+                ''', (ticker, row['Datetime'].strftime('%Y-%m-%d %H:%M:%S'), row['Open'], row['Close']))
+            conn.commit()
+
+def get_stock_data(ticker):
+    try:
+        yf_symbol = ticker + '.NS'
+        start_time = datetime.now() - timedelta(minutes=30)
+        end_time = datetime.now()
+        data = yf.download(yf_symbol, start=start_time, end=end_time, interval='1m')
+        if not data.empty:
+            data.reset_index(inplace=True)
+            print(f"Fetched recent data for symbol {ticker}")
+        return data
+    except Exception as e:
+        print(f"Error fetching recent data for symbol {ticker}: {e}")
+        return None
+
+def calculate_percentage_change(initial_price, current_price):
+    percentage_change = ((current_price - initial_price) / initial_price) * 100
+    return percentage_change
+
+def filter_stocks(stock_list, threshold):
+    increased = []
+    decreased = []
+    for stock in stock_list:
+        initial_data = pd.read_sql_query(f"SELECT * FROM stock_data WHERE ticker='{stock}'", conn)
+        if initial_data.empty:
+            continue
+        initial_price = initial_data.iloc[0]['open']
+        recent_data = get_stock_data(stock)
+        if recent_data is not None and not recent_data.empty:
+            current_price = recent_data.iloc[-1]['Close']
+            percentage_change = calculate_percentage_change(initial_price, current_price)
+            if percentage_change is not None:
+                if percentage_change > threshold:
+                    increased.append((stock, percentage_change))
+                elif percentage_change < -threshold:
+                    decreased.append((stock, percentage_change))
+    return increased, decreased
+
+def read_tickers_from_file(filename):
+    with open(filename, 'r') as file:
+        tickers = [line.strip() for line in file.readlines()]
+    return tickers
+
+def job():
+    ticker_file = 'tickers.txt'
+    nse_stocks = read_tickers_from_file(ticker_file)
+    threshold = 5  # Set your threshold percentage
+    increased, decreased = filter_stocks(nse_stocks, threshold)
+
+    print(f"Stocks with more than {threshold}% increase since the start of the day:")
+    for stock, change in increased:
+        print(f"{stock}: {change:.2f}%")
+
+    print(f"\nStocks with more than {threshold}% decrease since the start of the day:")
+    for stock, change in decreased:
+        print(f"{stock}: {change:.2f}%")
+
+# Read tickers and store initial data
+ticker_file = 'tickers.txt'
+nse_stocks = read_tickers_from_file(ticker_file)
+store_initial_data(nse_stocks)
+
+# Schedule the job every 3 minutes
+schedule.every(3).minutes.do(job)
+
+# Run the job once at the start
+job()
+
+# Keep running the scheduled jobs
+while True:
+    schedule.run_pending()
+    time.sleep(1)
