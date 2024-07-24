@@ -1,0 +1,50 @@
+import yfinance as yf
+import pandas as pd
+from datetime import datetime, timedelta
+
+def get_stock_data(ticker):
+    try:
+        yf_symbol = ticker + '.NS'
+        end_time = datetime.now()
+        start_time = end_time - timedelta(minutes=30)
+        data = yf.download(yf_symbol, start=start_time, end=end_time, interval='1m')
+        if not data.empty:
+            data.reset_index(inplace=True)
+            print(f"Fetched {len(data)} records for symbol {ticker}")
+        return data
+    except Exception as e:
+        print(f"Error fetching data for symbol {ticker}: {e}")
+        return None
+
+def calculate_percentage_change(df):
+    if len(df) < 2:
+        return None
+    start_price = df.iloc[0]['Close']
+    end_price = df.iloc[-1]['Close']
+    percentage_change = ((end_price - start_price) / start_price) * 100
+    return percentage_change
+
+def filter_stocks(stock_list, threshold):
+    result = []
+    for stock in stock_list:
+        data = get_stock_data(stock)
+        if data is not None and not data.empty:
+            percentage_change = calculate_percentage_change(data)
+            if percentage_change is not None and abs(percentage_change) > threshold:
+                result.append((stock, percentage_change))
+    return result
+
+def read_tickers_from_file(filename):
+    with open(filename, 'r') as file:
+        tickers = [line.strip() for line in file.readlines()]
+    return tickers
+
+# Example usage
+ticker_file = 'tickers.txt'
+nse_stocks = read_tickers_from_file(ticker_file)
+threshold = 1  # Set your threshold percentage
+stocks_with_significant_change = filter_stocks(nse_stocks, threshold)
+
+print("Stocks with more than", threshold, "% change in the last 30 minutes:")
+for stock, change in stocks_with_significant_change:
+    print(f"{stock}: {change:.2f}%")
