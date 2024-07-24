@@ -1,0 +1,65 @@
+import pandas as pd
+import yfinance as yf
+import matplotlib.pyplot as plt
+
+# Read the symbols and their sectors
+symbols_sectors = pd.read_excel('nse_data.xlsx', sheet_name='Sheet1')
+
+# Function to fetch historical data with error handling
+def fetch_data(symbol):
+    try:
+        print(f"Fetching data for {symbol}...")
+        stock_data = yf.download(symbol + ".NS", period='6mo')  # Adding ".NS" for NSE symbols
+        if stock_data.empty:
+            raise ValueError(f"No data found for {symbol}")
+        stock_data.reset_index(inplace=True)
+        stock_data['Symbol'] = symbol
+        return stock_data
+    except Exception as e:
+        print(f"Error fetching data for {symbol}: {e}")
+        return pd.DataFrame()  # Return an empty DataFrame if an error occurs
+
+# Fetch historical data for each symbol
+all_data = []
+for symbol in symbols_sectors['Symbol']:
+    stock_data = fetch_data(symbol)
+    if not stock_data.empty:
+        all_data.append(stock_data)
+
+# Combine all historical data into a single DataFrame
+historical_data = pd.concat(all_data, ignore_index=True)
+
+# Merge the historical data with symbols and sectors
+data = pd.merge(historical_data, symbols_sectors, on='Symbol')
+
+# Convert the Date column to datetime
+data['Date'] = pd.to_datetime(data['Date'])
+
+# Filter data for the last 6 months
+end_date = data['Date'].max()
+start_date = end_date - pd.DateOffset(months=6)
+data = data[(data['Date'] >= start_date) & (data['Date'] <= end_date)]
+
+# Group data by month and sector
+data['Month'] = data['Date'].dt.to_period('M')
+monthly_sector_data = data.groupby(['Month', 'Sector'])['Close'].mean().reset_index()
+
+# Pivot the data to get sectors as columns
+pivot_table = monthly_sector_data.pivot(index='Month', columns='Sector', values='Close')
+
+# Plot the sector-wise trend
+pivot_table.plot(kind='line', figsize=(14, 7))
+plt.title('Sector-wise Trend over the Last 6 Months in NSE')
+plt.xlabel('Month')
+plt.ylabel('Average Close Price')
+plt.legend(title='Sector')
+plt.grid(True)
+plt.show()
+
+# Save the processed data to a new Excel file
+with pd.ExcelWriter('nse_sector_trends.xlsx') as writer:
+    data.to_excel(writer, sheet_name='HistoricalData', index=False)
+    monthly_sector_data.to_excel(writer, sheet_name='MonthlySectorData', index=False)
+    pivot_table.to_excel(writer, sheet_name='PivotTable')
+
+print("Data processing complete and saved to 'nse_sector_trends.xlsx'")
